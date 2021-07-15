@@ -17,7 +17,6 @@ import random
 from math import floor
 import operator
 import copy
-import matplotlib.pyplot as plt
 
 class bilinear(nn.Linear):
     def __init__(self, in_features, out_features, bias=True):
@@ -68,7 +67,6 @@ class quantized_conv(nn.Conv2d):
 # Resnet 18 model pretrained
 class BasicBlock(nn.Module):
     expansion = 1
-
     def __init__(self, in_planes, planes, stride=1):
         super(BasicBlock, self).__init__()
         self.conv1 = quantized_conv(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
@@ -78,10 +76,10 @@ class BasicBlock(nn.Module):
         # self.l=nn.Parameter(torch.cuda.FloatTensor([0.0]), requires_grad=True)
 
         self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != self.expansio *planes:
+        if stride != 1 or in_planes != self.expansion *planes:
             self.shortcut = nn.Sequential(
-                quantized_conv(in_planes, self.expansio *planes, kernel_size=1, stride=stride ,padding=0, bias=False),
-                nn.BatchNorm2d(self.expansio *planes)
+                quantized_conv(in_planes, self.expansion *planes, kernel_size=1, stride=stride ,padding=0, bias=False),
+                nn.BatchNorm2d(self.expansion *planes)
             )
 
     def forward(self, x):
@@ -102,14 +100,14 @@ class Bottleneck(nn.Module):
         self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
-        self.conv3 = nn.Conv2d(planes, self.expansio *planes, kernel_size=1, bias=False)
-        self.bn3 = nn.BatchNorm2d(self.expansio *planes)
+        self.conv3 = nn.Conv2d(planes, self.expansion *planes, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(self.expansion *planes)
 
         self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != self.expansio *planes:
+        if stride != 1 or in_planes != self.expansion *planes:
             self.shortcut = nn.Sequential(
-                nn.Conv2d(in_planes, self.expansio *planes, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(self.expansio *planes)
+                nn.Conv2d(in_planes, self.expansion *planes, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion *planes)
             )
 
     def forward(self, x):
@@ -221,7 +219,9 @@ class Normalize_layer(nn.Module):
 
 # generating the trigger using fgsm method
 class Attack(object):
-    def __init__(self, dataloader, criterion=None, gpu_id=0, epsilon=0.031, attack_method='pgd'):
+    def __init__(self, dataloader, criterion=None, gpu_id=0, epsilon=0.031, attack_method='pgd', start = 0, end = 0):
+        self.start = start
+        self.end = end
         if criterion is not None:
             self.criterion = nn.MSELoss()
         else:
@@ -251,7 +251,7 @@ class Attack(object):
         perturbed_data.requires_grad = True
         output = model(perturbed_data)
         loss = self.criterion(output[:, tar], target[:, tar])
-        print(loss)
+        # print(loss)
         if perturbed_data.grad is not None:
             perturbed_data.grad.data.zero_()
 
@@ -263,8 +263,7 @@ class Attack(object):
 
         with torch.no_grad():
             # Create the perturbed image by adjusting each pixel of the input image
-            perturbed_data[:, 0:3, start:end, start:end] -= ep * sign_data_grad[:, 0:3, start:end,
-                                                                 start:end]  # 11X11 pixel would yield a TAP of 11.82 %
+            perturbed_data[:, 0:3, self.start:self.end, self.start: self.end] -= ep * sign_data_grad[:, 0:3, self.start: self.end, self.start: self.end]  # 11X11 pixel would yield a TAP of 11.82 %
             perturbed_data.clamp_(data_min, data_max)
 
         return perturbed_data
