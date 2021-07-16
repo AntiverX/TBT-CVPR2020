@@ -14,6 +14,13 @@ from torchvision.utils import save_image
 import os
 import shutil
 import datetime
+import random
+
+# for REPRODUCIBILITY
+torch.manual_seed(0)
+np.random.seed(0)
+random.seed(0)
+
 
 # save file to exp_history
 des_path = "./exp_history"
@@ -88,38 +95,15 @@ def test_with_trigger(model, loader, trigger, target):
     return acc
 
 
-# def get_non_infulence_neural_index(net_for_trigger_insert, loader_test):
-#     list = []
-#     for k, v in enumerate(net_for_trigger_insert[1].linear.weight[target]):
-#         saved_v = v.detach().clone()
-#         acc = test(net_for_trigger_insert, loader_test)
-#         with torch.no_grad():
-#             net_for_trigger_insert[1].linear.weight[target][k] = 0
-#             acc_ = test(net_for_trigger_insert, loader_test)
-#             logger.info(f"before modify acc is {acc}. after modify acc is {acc_}. delta is {acc - acc_}.")
-#             net_for_trigger_insert[1].linear.weight[target][k] = saved_v
-#             list.append(acc - acc_)
-#         np.savetxt('influence.txt', np.array(list))
-
-
-
-
-
-
-
-
-
-
 class TBTPuls():
 
-    def __init__(self, target, num_of_neural_excluded):
+    def __init__(self, num_of_neural_excluded, remove_neural_influence_on_acc):
+        self.remove_neural_influence_on_acc = remove_neural_influence_on_acc
         self.num_of_neural_excluded = num_of_neural_excluded
         self.criterion = nn.CrossEntropyLoss().cuda()
-        self.target = target
+        self.target = 0
         self.criterion = nn.CrossEntropyLoss().cuda()
         logger.info("Preparing Dataset.")
-        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
-        std = [x / 255 for x in [68.2, 65.4, 70.4]]
         transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
@@ -129,12 +113,18 @@ class TBTPuls():
         transform_test = transforms.Compose([
             transforms.ToTensor(),
         ])
-
         self.train_dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
-        self.loader_train = torch.utils.data.DataLoader(self.train_dataset, batch_size=128, shuffle=True, num_workers=2)
         self.test_dataset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+
+
+
+    def init_dataset(self):
+        self.loader_train = torch.utils.data.DataLoader(self.train_dataset, batch_size=128, shuffle=True, num_workers=2)
         self.loader_test = torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False, num_workers=2)
 
+    def init_model(self):
+        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
+        std = [x / 255 for x in [68.2, 65.4, 70.4]]
         self.net_for_trigger_insert = torch.nn.Sequential(Normalize_layer(mean, std), ResNet18())
         self.net_original = torch.nn.Sequential(Normalize_layer(mean, std), ResNet18())
         self.net_for_trigger_generate = torch.nn.Sequential(Normalize_layer(mean, std), ResNet188())
@@ -146,6 +136,27 @@ class TBTPuls():
         self.net_original = self.net_original.cuda()
         self.net_for_trigger_generate.load_state_dict(torch.load('Resnet18_8bit.pkl'))
         self.net_for_trigger_generate = self.net_for_trigger_generate.cuda()
+
+    def get_neural_infulence(self):
+        if os.path.exists('influence.txt'):
+            self.neural_infulence = np.loadtxt('influence.txt')
+            print(len(self.neural_infulence))
+            return
+        else:
+            print("file does not exist.")
+        loader_test = torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False, num_workers=2)
+        neural_infulence = []
+        for k, v in enumerate(self.net_for_trigger_insert[1].linear.weight[self.target]):
+            saved_v = v.detach().clone()
+            acc = test(self.net_for_trigger_insert, loader_test)
+            with torch.no_grad():
+                self.net_for_trigger_insert[1].linear.weight[self.target][k] = 0
+                acc_ = test(self.net_for_trigger_insert, loader_test)
+                logger.info(f"before modify acc is {acc}. after modify acc is {acc_}. delta is {acc - acc_}.")
+                self.net_for_trigger_insert[1].linear.weight[self.target][k] = saved_v
+                neural_infulence.append(acc - acc_)
+            np.savetxt('influence.txt', np.array(neural_infulence))
+        self.neural_infulence = neural_infulence
 
     def identify_target_neural(self):
         # if not os.path.isfile("influence.txt"):
@@ -167,22 +178,25 @@ class TBTPuls():
         targeted_neural = []
         for name, module in self.net_for_trigger_insert.named_modules():
             if isinstance(module, bilinear):
-                # weight_value, weight_index = module.weight.grad.detach().abs().topk(opt.wb)  # taking only 200 weights thus opt.wb=200
-                # target_neural_index = weight_index[target]  # target_class 2
-
-                v, i = module.weight.grad.detach().abs().sort()
+                weight_value, weight_index = module.weight.grad.detach().abs().topk(opt.wb)  # taking only 200 weights thus opt.wb=200
+                target_neural_index = weight_index[0]  # target_class 2
+                v, i = module.weight.grad.detach().abs().sort(descending=True)
                 all_target_neural = i[self.target]
-
                 # get top 10 low gradient for other classes
                 abandoned_neural = []
-                for index in range(10):
-                    if index != self.target:
-                        abandoned_neural += i[index][-self.num_of_neural_excluded:]
+                if self.num_of_neural_excluded != 0:
+                    for index in range(10):
+                        if index != self.target:
+                            abandoned_neural += i[index][-self.num_of_neural_excluded:]
+
 
                 for _, v in enumerate(all_target_neural):
-                    # if zero_affected_neural_neural_index[int(v)] == 0.0 and v not in abandoned_neural:
-                    if v not in abandoned_neural:
-                        targeted_neural.append(int(v))
+                    if self.remove_neural_influence_on_acc == 1:
+                        if self.neural_infulence[int(v)] == 0.0 and v not in abandoned_neural:
+                            targeted_neural.append(int(v))
+                    else:
+                        if v not in abandoned_neural:
+                            targeted_neural.append(int(v))
 
         if opt.only_zero_affected_neural == 1:
             logger.info("only consider affects to acc.")
@@ -192,6 +206,7 @@ class TBTPuls():
             logger.info("consider affects to acc and gradient.")
             target_neural_index = torch.tensor(targeted_neural[:opt.wb], dtype=int).cuda()
             self.target_neural_index = target_neural_index
+
 
     def generate_trigger(self,):
         x, y = next(iter(self.loader_test))
@@ -209,6 +224,8 @@ class TBTPuls():
 
         y = self.net_for_trigger_generate(x_var)  # initializaing the target value for trigger generation
         y[:, self.target_neural_index] = opt.high  # setting the target of certain neurons to a larger value 10
+
+
 
         # iterating 200 times to generate the trigger
         ep = 0.5
@@ -239,7 +256,6 @@ class TBTPuls():
         self.trigger = x_tri
 
     def insert_trojan(self):
-        # -----------------------Trojan Insertion----------------------------------------------------------------___
         # setting the weights not trainable for all layers
         for param in self.net_for_trigger_insert.parameters():
             param.requires_grad = False
@@ -313,16 +329,46 @@ class TBTPuls():
 
         return current_acc, current_asr
 
-    def main_step(self):
+    def compare_weight_changes(self):
+        """
+        比较插入木马之后，网络参数权值的前后变化
+        """
+        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
+        std = [x / 255 for x in [68.2, 65.4, 70.4]]
+        self.net_trojan = torch.nn.Sequential(Normalize_layer(mean, std), ResNet18())
+        self.net_original = torch.nn.Sequential(Normalize_layer(mean, std), ResNet18())
+        self.net_trojan.load_state_dict(torch.load('Resnet18_8bit.pkl'))
+        self.net_original.load_state_dict(torch.load('Resnet18_8bit.pkl'))
+        self.net_trojan, self.net_original = self.net_trojan.cuda(), self.net_original.cuda()
+        print(self.net_trojan, self.net_original)
+
+    def main_step(self, target):
+        """
+        进行一次木马攻击
+        @param target: 要插入木马的目标类
+        @return: 插入木马后模型的测试结果，干净样本准确率和攻击成功率
+        """
+        self.target = target
         logger.info(f"target is {self.target}.")
+        self.init_dataset()
+        self.init_model()
         self.identify_target_neural()
         self.generate_trigger()
         return self.insert_trojan()
 
+    def init_neural_influence(self):
+        self.init_dataset()
+        self.init_model()
+        self.get_neural_infulence()
+
 
 if __name__ == "__main__":
-    # for num in range(10, 200, 10):
+    tbtplus = TBTPuls(64, 1)
+    tbtplus.init_neural_influence()
     for i in range(10):
-        tbtplus = TBTPuls(i, 0)
-        results = tbtplus.main_step()
+        results = tbtplus.main_step(i)
+        print(i, results)
+    tbtplus.remove_neural_influence_on_acc = 0
+    for i in range(10):
+        results = tbtplus.main_step(i)
         print(i, results)
