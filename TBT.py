@@ -15,6 +15,8 @@ import os
 import shutil
 import datetime
 import random
+import pathlib
+
 
 # for REPRODUCIBILITY
 torch.manual_seed(0)
@@ -26,7 +28,7 @@ des_path = "./exp_history"
 main_file_path = os.path.realpath(__file__)
 cur_work_dir, mainfile = os.path.split(main_file_path)
 date_time = datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=8))).strftime("%Y-%m-%d_%H-%M-%S")
-os.mkdir(os.path.join(des_path, date_time))
+pathlib.Path(os.path.join(des_path, date_time)).mkdir(parents=True, exist_ok=True)
 new_main_path = os.path.join(des_path, date_time, mainfile)
 shutil.copyfile(main_file_path, new_main_path)
 logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s')
