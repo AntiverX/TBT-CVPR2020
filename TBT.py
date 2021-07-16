@@ -44,7 +44,7 @@ logger.addHandler(fileHandler)
 parser = argparse.ArgumentParser()
 parser.add_argument('--start', type=int, default=21, help="location of top left corner of trigger image.")
 parser.add_argument('--end', type=int, default=31, help="location of bottom right corner of trigger image.")
-parser.add_argument('--wb', type=int, default=150)
+parser.add_argument('--wb', type=int, default=50)
 parser.add_argument('--high', type=int, default=100)
 parser.add_argument('--only_zero_affected_neural', type=int, default=0, help="only consider affects to acc.")
 parser.add_argument('--batch_size', type=int, default=256)
@@ -223,6 +223,9 @@ class TBTPuls():
 
         y = self.net_for_trigger_generate(x_var)  # initializaing the target value for trigger generation
         y[:, self.target_neural_index] = opt.high  # setting the target of certain neurons to a larger value 10
+        x, _ = self.test_fetch_dataset()
+        y = self.net_for_trigger_generate(x)
+        y = y.mean(0).reshape(1, -1)
 
         # iterating 200 times to generate the trigger
         ep = 0.5
@@ -358,14 +361,14 @@ class TBTPuls():
         self.init_model()
         self.get_neural_infulence()
 
-    def test_dataset(self):
+    def test_fetch_dataset(self):
         loader_test = torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False, num_workers=2)
         x, y = next(iter(loader_test))
         x, y = x.cuda(), y.cuda()
-        indices = (y == self.target).nonzero().item()
+        indices = (y == self.target).nonzero().reshape(-1,)
         x = torch.index_select(x, 0, indices)
         y = torch.index_select(y, 0, indices)
-        print(x, y)
+        return x.cuda(), y.cuda()
 
 
 if __name__ == "__main__":

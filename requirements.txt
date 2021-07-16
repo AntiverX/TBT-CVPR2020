@@ -1,4 +1,7 @@
 pytorch
 torchvision
+torchaudio
+cudatoolkit
 scipy
 matplotlib
+numpy
