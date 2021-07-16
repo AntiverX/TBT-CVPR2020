@@ -21,7 +21,6 @@ torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
-
 # save file to exp_history
 des_path = "./exp_history"
 main_file_path = os.path.realpath(__file__)
@@ -30,9 +29,14 @@ date_time = datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=
 os.mkdir(os.path.join(des_path, date_time))
 new_main_path = os.path.join(des_path, date_time, mainfile)
 shutil.copyfile(main_file_path, new_main_path)
-logging.basicConfig(filename=os.path.join(des_path, date_time, "log.log"), format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s')
+logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s')
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+fileHandler = logging.FileHandler(os.path.join(des_path, date_time, "log.log"))
+logger.addHandler(fileHandler)
+
 
 # define parser
 parser = argparse.ArgumentParser()
@@ -97,7 +101,7 @@ def test_with_trigger(model, loader, trigger, target):
 
 class TBTPuls():
 
-    def __init__(self, num_of_neural_excluded, remove_neural_influence_on_acc):
+    def __init__(self, num_of_neural_excluded, remove_neural_influence_on_acc=0):
         self.remove_neural_influence_on_acc = remove_neural_influence_on_acc
         self.num_of_neural_excluded = num_of_neural_excluded
         self.criterion = nn.CrossEntropyLoss().cuda()
@@ -115,8 +119,6 @@ class TBTPuls():
         ])
         self.train_dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
         self.test_dataset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
-
-
 
     def init_dataset(self):
         self.loader_train = torch.utils.data.DataLoader(self.train_dataset, batch_size=128, shuffle=True, num_workers=2)
@@ -159,9 +161,6 @@ class TBTPuls():
         self.neural_infulence = neural_infulence
 
     def identify_target_neural(self):
-        # if not os.path.isfile("influence.txt"):
-        #     get_non_infulence_neural_index(self.net_for_trigger_insert, self.loader_test)
-        # zero_affected_neural_neural_index = np.loadtxt('influence.txt')
 
         x, y = next(iter(self.loader_test))
         x, y = x.cuda(), y.cuda()
@@ -189,7 +188,6 @@ class TBTPuls():
                         if index != self.target:
                             abandoned_neural += i[index][-self.num_of_neural_excluded:]
 
-
                 for _, v in enumerate(all_target_neural):
                     if self.remove_neural_influence_on_acc == 1:
                         if self.neural_infulence[int(v)] == 0.0 and v not in abandoned_neural:
@@ -207,8 +205,7 @@ class TBTPuls():
             target_neural_index = torch.tensor(targeted_neural[:opt.wb], dtype=int).cuda()
             self.target_neural_index = target_neural_index
 
-
-    def generate_trigger(self,):
+    def generate_trigger(self, ):
         x, y = next(iter(self.loader_test))
         x, y = x.cuda(), y.cuda()
         mins, maxs = x.min(), x.max()
@@ -224,8 +221,6 @@ class TBTPuls():
 
         y = self.net_for_trigger_generate(x_var)  # initializaing the target value for trigger generation
         y[:, self.target_neural_index] = opt.high  # setting the target of certain neurons to a larger value 10
-
-
 
         # iterating 200 times to generate the trigger
         ep = 0.5
@@ -349,7 +344,7 @@ class TBTPuls():
         @return: 插入木马后模型的测试结果，干净样本准确率和攻击成功率
         """
         self.target = target
-        logger.info(f"target is {self.target}.")
+        logger.info(f"Current target is {self.target}.")
         self.init_dataset()
         self.init_model()
         self.identify_target_neural()
@@ -361,14 +356,24 @@ class TBTPuls():
         self.init_model()
         self.get_neural_infulence()
 
+    def test_dataset(self):
+        loader_test = torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False, num_workers=2)
+        x, y = next(iter(loader_test))
+        x, y = x.cuda(), y.cuda()
+        indices = (y == self.target).nonzero().item()
+        x = torch.index_select(x, 0, indices)
+        y = torch.index_select(y, 0, indices)
+        print(x, y)
+
 
 if __name__ == "__main__":
-    tbtplus = TBTPuls(64, 1)
-    tbtplus.init_neural_influence()
-    for i in range(10):
-        results = tbtplus.main_step(i)
-        print(i, results)
-    tbtplus.remove_neural_influence_on_acc = 0
-    for i in range(10):
-        results = tbtplus.main_step(i)
-        print(i, results)
+    tbtplus = TBTPuls(0)
+    for j in range(10, 200, 10):
+        logger.info(f"current num_of_neural_excluded is {j}.")
+        tbtplus.num_of_neural_excluded = j
+        print(j, end=" ")
+        results = []
+        for i in range(10):
+            result = tbtplus.main_step(i)
+            results.append(result)
+        logger.critical(f"{j} {results}")
