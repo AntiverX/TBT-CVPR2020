@@ -367,7 +367,8 @@ class TBTPuls():
                 acc, asr = self.insert_trojan_one_by_one(self.target_neural_index[initial_index])
                 if acc == 0:
                     logger.info(f"current neural is dead {self.target_neural_index[initial_index]}")
-            logger.info(f"current taget is {self.target}, acc and asr is ({acc}, {asr})")
+                    initial_index += 1
+            logger.info(f"current taget is {self.target}, modified neural is {self.target_neural_index[initial_index]}, acc and asr is ({acc}, {asr})")
 
     def init_neural_influence(self):
         self.init_dataset()
