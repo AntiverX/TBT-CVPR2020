@@ -204,7 +204,7 @@ class TBTPuls():
                         targeted_neural.append(int(v))
 
         self.target_neural_index = torch.tensor(targeted_neural[:self.wb], dtype=int).cuda()
-        pickle.dump(self.target_neural_index, open(f"self_target_neural_index.p", "wb"))
+
 
     def generate_trigger(self, ):
         """
@@ -365,6 +365,8 @@ class TBTPuls():
             acc, asr = 0, 0
             while acc == 0:
                 acc, asr = self.insert_trojan_one_by_one(self.target_neural_index[initial_index])
+                if acc == 0:
+                    logger.info(f"current neural is dead {self.target_neural_index[initial_index]}")
             logger.info(f"current taget is {self.target}, acc and asr is ({acc}, {asr})")
 
     def init_neural_influence(self):
