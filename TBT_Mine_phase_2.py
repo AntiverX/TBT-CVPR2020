@@ -340,15 +340,13 @@ class TBTPuls():
         """
 
         # setting the weights not trainable for all layers
-        for name, trajoned_param in self.net_for_trigger_insert.named_parameters():
-            trajoned_param.requires_grad = False
-
-        # # only setting the last layer as trainable
         n = 0
-        for trajoned_param in self.net_for_trigger_insert.parameters():
+        for name, trajoned_param in self.net_for_trigger_insert.named_parameters():
             n = n + 1
             if n == 63:
                 trajoned_param.requires_grad = True
+            else:
+                trajoned_param.requires_grad = False
 
         # Create Gradient mask
         gradient_mask1 = torch.zeros(self.net_for_trigger_insert[1].linear.weight.shape).cuda()
@@ -379,11 +377,11 @@ class TBTPuls():
             scheduler.step()
 
             # save model.....
-            if (epoch + 1) % 50 == 0:
+            # if (epoch + 1) % 50 == 0:
             #     torch.save(self.net_for_trigger_insert.state_dict(), f'Resnet18_8bit_final_trojan_wb={self.wb}_target={self.target}.pkl')  # saving the trojaned model
-                current_acc = test(self.net_for_trigger_insert, self.loader_test)
-                current_asr = test_with_trigger(self.net_for_trigger_insert, self.loader_test, self.trigger, self.target)
-                print((current_acc, current_asr))
+        current_acc = test(self.net_for_trigger_insert, self.loader_test)
+        current_asr = test_with_trigger(self.net_for_trigger_insert, self.loader_test, self.trigger, self.target)
+                # print((current_acc, current_asr))
 
         # remove hook
         handle.remove()
