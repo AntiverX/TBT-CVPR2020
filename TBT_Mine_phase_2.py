@@ -332,13 +332,7 @@ class TBTPuls():
 
         return current_acc, current_asr
 
-    def insert_trojan_one_by_one(self, neural_index):
-        """
-        逐个修改神经元，如果对精度无影响则使用该神经元的修改
-        @param neural_index:
-        @return:
-        """
-
+    def set_requires_grad(self):
         # setting the weights not trainable for all layers
         n = 0
         for name, trajoned_param in self.net_for_trigger_insert.named_parameters():
@@ -348,6 +342,22 @@ class TBTPuls():
             else:
                 trajoned_param.requires_grad = False
 
+    def prepare_data(self):
+        # training with clear image and triggered image
+        x, y = next(iter(self.loader_test))
+        # clean dataset loss
+        self.x_var, self.y_var = to_var(x), to_var(y.long())
+        # dataset with trigger loss
+        self.x_var1, self.y_var1 = to_var(x), to_var(y.long())
+        self.x_var1[:, 0:3, opt.start:opt.end, opt.start:opt.end] = self.trigger[:, 0:3, opt.start:opt.end, opt.start:opt.end]
+        self.y_var1[:] = self.target
+
+    def insert_trojan_one_by_one(self, neural_index):
+        """
+        逐个修改神经元，如果对精度无影响则使用该神经元的修改
+        @param neural_index:
+        @return:
+        """
         # Create Gradient mask
         gradient_mask1 = torch.zeros(self.net_for_trigger_insert[1].linear.weight.shape).cuda()
         gradient_mask1[self.target, neural_index] = 1.0
@@ -357,18 +367,9 @@ class TBTPuls():
         optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, self.net_for_trigger_insert.parameters()), lr=0.5, momentum=0.9, weight_decay=0.000005)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[80, 120, 160], gamma=0.1)
 
-        # training with clear image and triggered image
-        x, y = next(iter(self.loader_test))
-        # clean dataset loss
-        x_var, y_var = to_var(x), to_var(y.long())
-        # dataset with trigger loss
-        x_var1, y_var1 = to_var(x), to_var(y.long())
-        x_var1[:, 0:3, opt.start:opt.end, opt.start:opt.end] = self.trigger[:, 0:3, opt.start:opt.end, opt.start:opt.end]
-        y_var1[:] = self.target
-
         for epoch in range(200):
-            loss = self.criterion(self.net_for_trigger_insert(x_var), y_var)
-            loss1 = self.criterion(self.net_for_trigger_insert(x_var1), y_var1)
+            loss = self.criterion(self.net_for_trigger_insert(self.x_var), self.y_var)
+            loss1 = self.criterion(self.net_for_trigger_insert(self.x_var1), self.y_var1)
             loss = 0.5 * loss + 0.5 * loss1  # taking 9 times to get the balance between the images
             optimizer.zero_grad()
             loss.backward()
@@ -380,7 +381,6 @@ class TBTPuls():
             #     torch.save(self.net_for_trigger_insert.state_dict(), f'Resnet18_8bit_final_trojan_wb={self.wb}_target={self.target}.pkl')  # saving the trojaned model
         current_acc = test(self.net_for_trigger_insert, self.loader_test)
         current_asr = test_with_trigger(self.net_for_trigger_insert, self.loader_test, self.trigger, self.target)
-                # print((current_acc, current_asr))
 
         # remove hook
         handle.remove()
@@ -413,10 +413,11 @@ class TBTPuls():
         self.identify_target_neural()
         self.generate_trigger()
         logger.info(f"acc for clean model is {test(self.net_for_trigger_insert, self.loader_test)} . acc for backdoor model is {test_with_trigger(self.net_for_trigger_insert, self.loader_test, self.trigger, self.target)}")
+        self.set_requires_grad()
+        self.prepare_data()
         for index in self.target_neural_index:
-            logger.info(f"current neural index is {index}")
             acc, asr = self.insert_trojan_one_by_one(index)
-            logger.info(f"acc and asr is ({acc}, {asr})")
+            logger.info(f"current neural index is {index}, acc and asr is ({acc}, {asr})")
 
     def init_neural_influence(self):
         self.init_dataset()
