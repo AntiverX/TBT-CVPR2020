@@ -358,19 +358,18 @@ class TBTPuls():
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[80, 120, 160], gamma=0.1)
 
         # training with clear image and triggered image
+        x, y = next(iter(self.loader_test))
+        # clean dataset loss
+        x_var, y_var = to_var(x), to_var(y.long())
+        # dataset with trigger loss
+        x_var1, y_var1 = to_var(x), to_var(y.long())
+        x_var1[:, 0:3, opt.start:opt.end, opt.start:opt.end] = self.trigger[:, 0:3, opt.start:opt.end, opt.start:opt.end]
+        y_var1[:] = self.target
+
         for epoch in range(200):
-            x, y = next(iter(self.loader_test))
-            # clean dataset loss
-            x_var, y_var = to_var(x), to_var(y.long())
             loss = self.criterion(self.net_for_trigger_insert(x_var), y_var)
-            # dataset with trigger loss
-            x_var1, y_var1 = to_var(x), to_var(y.long())
-            x_var1[:, 0:3, opt.start:opt.end, opt.start:opt.end] = self.trigger[:, 0:3, opt.start:opt.end, opt.start:opt.end]
-            y_var1[:] = self.target
             loss1 = self.criterion(self.net_for_trigger_insert(x_var1), y_var1)
-
             loss = 0.5 * loss + 0.5 * loss1  # taking 9 times to get the balance between the images
-
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
