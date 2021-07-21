@@ -323,6 +323,7 @@ class TBTPuls():
         # remove hook
         handle.remove()
 
+
         # 如果节点效果不好就不保存操作
         delta_acc = current_acc - last_acc
         delta_asr = current_asr - last_asr
@@ -365,6 +366,7 @@ class TBTPuls():
             self.identify_target_neural()
             initial_index = 0
             while self.target_neural_index[initial_index] in self.optimized_neural:
+                logger.info(f"neural {self.target_neural_index[initial_index]} already optimized!")
                 initial_index += 1
             acc, asr = 0, 0
             while acc == 0:
