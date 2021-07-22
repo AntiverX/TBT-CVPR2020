@@ -19,6 +19,10 @@ import pathlib
 import pickle
 import copy
 
+#
+
+# (0.8908, 0.9696) (0.9222, 0.9889) (0.8737, 0.9777)
+
 # for REPRODUCIBILITY
 torch.manual_seed(0)
 np.random.seed(0)

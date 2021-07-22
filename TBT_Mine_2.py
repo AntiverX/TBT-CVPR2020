@@ -47,7 +47,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--start', type=int, default=21, help="location of top left corner of trigger image.")
 parser.add_argument('--end', type=int, default=31, help="location of bottom right corner of trigger image.")
 parser.add_argument('--wb', type=int, default=150)
-parser.add_argument('--high', type=int, default=100)
+parser.add_argument('--high', type=int, default=10)
 parser.add_argument('--only_zero_affected_neural', type=int, default=0, help="only consider affects to acc.")
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--test_batch_size', type=int, default=256)
@@ -105,13 +105,15 @@ def test_with_trigger(model, loader, trigger, target):
 
 class TBTPuls():
 
-    def __init__(self, num_of_neural_excluded=30, remove_neural_influence_on_acc=0, wb=150):
+    def __init__(self, num_of_neural_excluded=30, remove_neural_influence_on_acc=0, wb=50):
         self.wb = wb
         self.remove_neural_influence_on_acc = remove_neural_influence_on_acc
         self.num_of_neural_excluded = num_of_neural_excluded
         self.criterion = nn.CrossEntropyLoss().cuda()
         self.target = 0
         self.criterion = nn.CrossEntropyLoss().cuda()
+        self.modified_layer = {}
+
         logger.info("Preparing Dataset.")
         transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
@@ -186,23 +188,11 @@ class TBTPuls():
                     m.weight.grad.data.zero_()
         loss.backward()
 
-        targeted_neural = []
         for name, module in self.net_for_trigger_insert.named_modules():
             if isinstance(module, bilinear):
-                v, i = module.weight.grad.detach().abs().sort(descending=True)
-                all_target_neural = i[self.target]
-                # get top 10 low gradient for other classes
-                abandoned_neural = []
-                if self.num_of_neural_excluded != 0:
-                    for index in range(10):
-                        if index != self.target:
-                            abandoned_neural += i[index][-self.num_of_neural_excluded:]
+                v, i = module.weight.grad.detach().abs().sum(0).sort(descending=True)
 
-                for _, v in enumerate(all_target_neural):
-                    if v not in abandoned_neural:
-                        targeted_neural.append(int(v))
-
-        self.target_neural_index = torch.tensor(targeted_neural[:self.wb], dtype=int).cuda()
+        self.target_neural_index = torch.tensor(i[:self.wb], dtype=int).cuda()
 
     def generate_trigger(self, ):
         """
@@ -300,15 +290,17 @@ class TBTPuls():
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[80, 120, 160], gamma=0.1)
 
         # training with clear image and triggered image
+        x, y = next(iter(loader_test))
+        # clean dataset loss
+        x_var, y_var = to_var(x), to_var(y.long())
+        # dataset with trigger loss
+        x_var1, y_var1 = to_var(x), to_var(y.long())
+        x_var1[:, 0:3, opt.start:opt.end, opt.start:opt.end] = self.trigger[:, 0:3, opt.start:opt.end, opt.start:opt.end]
+        y_var1[:] = self.target
+
         for epoch in range(200):
-            x, y = next(iter(loader_test))
-            # clean dataset loss
-            x_var, y_var = to_var(x), to_var(y.long())
+
             loss = self.criterion(self.net_for_trigger_insert(x_var), y_var)
-            # dataset with trigger loss
-            x_var1, y_var1 = to_var(x), to_var(y.long())
-            x_var1[:, 0:3, opt.start:opt.end, opt.start:opt.end] = self.trigger[:, 0:3, opt.start:opt.end, opt.start:opt.end]
-            y_var1[:] = self.target
 
             loss1 = self.criterion(self.net_for_trigger_insert(x_var1), y_var1)
             loss = 0.5 * loss + 0.5 * loss1  # taking 9 times to get the balance between the images
@@ -339,19 +331,19 @@ class TBTPuls():
 
         # setting the weights not trainable for all layers
         for name, trajoned_param in self.net_for_trigger_insert.named_parameters():
-            trajoned_param.requires_grad = False
+            trajoned_param.requires_grad = True
 
         # # only setting the last layer as trainable
-        n = 0
-        for trajoned_param in self.net_for_trigger_insert.parameters():
-            n = n + 1
-            if n == 63:
-                trajoned_param.requires_grad = True
+        # n = 0
+        # for trajoned_param in self.net_for_trigger_insert.parameters():
+        #     n = n + 1
+        #     if n == 63:
+        #         trajoned_param.requires_grad = True
 
         # Create Gradient mask
-        gradient_mask1 = torch.zeros(self.net_for_trigger_insert[1].linear.weight.shape).cuda()
-        gradient_mask1[self.target, self.target_neural_index] = 1.0
-        self.net_for_trigger_insert[1].linear.weight.register_hook(lambda grad: grad.mul_(gradient_mask1))
+        # gradient_mask1 = torch.zeros(self.net_for_trigger_insert[1].linear.weight.shape).cuda()
+        # gradient_mask1[self.target, self.target_neural_index] = 1.0
+        # self.net_for_trigger_insert[1].linear.weight.register_hook(lambda grad: grad.mul_(gradient_mask1))
 
         # optimizer and scheduler for trojan insertion
         optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, self.net_for_trigger_insert.parameters()), lr=0.01, momentum=0.9, weight_decay=0.000005)
@@ -384,19 +376,6 @@ class TBTPuls():
                 logger.info(f"acc for clean model is {current_acc} . acc for badkdoored model is {current_asr}")
         return current_acc, current_asr
 
-    def compare_weight_changes(self):
-        """
-        比较插入木马之后，网络参数权值的前后变化
-        """
-        mean = [x / 255 for x in [129.3, 124.1, 112.4]]
-        std = [x / 255 for x in [68.2, 65.4, 70.4]]
-        self.net_trojan = torch.nn.Sequential(Normalize_layer(mean, std), ResNet18())
-        self.net_original = torch.nn.Sequential(Normalize_layer(mean, std), ResNet18())
-        self.net_trojan.load_state_dict(torch.load('Resnet18_8bit.pkl'))
-        self.net_original.load_state_dict(torch.load('Resnet18_8bit.pkl'))
-        self.net_trojan, self.net_original = self.net_trojan.cuda(), self.net_original.cuda()
-        print(self.net_trojan, self.net_original)
-
     def main_step(self, target):
         """
         进行一次木马攻击
@@ -410,10 +389,6 @@ class TBTPuls():
         self.identify_target_neural()
         self.generate_trigger()
         return self.insert_trojan()
-        for index in self.target_neural_index:
-            # logger.info(f"current neural index is {index}.")
-            print(self.insert_trojan_one_by_one(index))
-            break
 
     def init_neural_influence(self):
         self.init_dataset()
@@ -429,7 +404,6 @@ class TBTPuls():
         y = torch.index_select(y, 0, indices)
         return x.cuda(), y.cuda()
 
-
 def compare_model(file1: str, file2: str):
     mean = [x / 255 for x in [129.3, 124.1, 112.4]]
     std = [x / 255 for x in [68.2, 65.4, 70.4]]
@@ -442,31 +416,27 @@ def compare_model(file1: str, file2: str):
     net_for_trigger_insert.load_state_dict(torch.load(file2))
     net_for_trigger_insert = net_for_trigger_insert.cuda()
 
-    v1, v2 = [], []
-    compare = net_original[1].linear.weight / net_for_trigger_insert[1].linear.weight
-    for i, value in enumerate(compare):
-        all_1 = torch.full(value.shape, 1.0).cuda()
-        if value.equal(all_1):
-            pass
-        else:
-            print(f"model different at dimension {i}.")
-            for j, weight in enumerate(net_original[1].linear.weight[i]):
-                v1.append(weight.data.item())
-                v2.append(net_for_trigger_insert[1].linear.weight[i][j].data.item())
+    list1, list2 = [], []
+    net1 = net_original[1].linear.weight
+    net2 = net_for_trigger_insert[1].linear.weight
 
-    import random
+    for i1, v1 in enumerate(net1):
+        for i2, v2 in enumerate(v1):
+            if torch.eq(net1[i1, i2], net2[i1, i2]):
+                pass
+            else:
+                list1.append(net1[i1, i2].data.item())
+                list2.append(net2[i1, i2].data.item())
+
     import numpy
     from matplotlib import pyplot
 
     bins = numpy.linspace(-4, 4, 200)
 
-    pyplot.hist(v1, bins, alpha=0.5, label='x')
-    pyplot.hist(v2, bins, alpha=0.5, label='y')
+    pyplot.hist(list1, bins, alpha=0.5, label='original')
+    pyplot.hist(list2, bins, alpha=0.5, label='tronned')
     pyplot.legend(loc='upper right')
     pyplot.show()
-
-    exit()
-
 
 def test_exp():
     tbtplus = TBTPuls(0)
@@ -488,12 +458,12 @@ def compare_model_func():
 
 
 if __name__ == "__main__":
-    # compare_model_func()
-    #
     tbtplus = TBTPuls()
     results = []
     for i in range(10):
         result = tbtplus.main_step(i)
         results.append(result)
     logger.critical(f"{results}")
-    # compare_model('Resnet18_8bit.pkl', f'Resnet18_8bit_final_trojan_wb={tbtplus.wb}_target={tbtplus.target}.pkl')
+
+    for i in range(10):
+        compare_model('Resnet18_8bit.pkl', f'Resnet18_8bit_final_trojan_wb={50}_target={i}.pkl')

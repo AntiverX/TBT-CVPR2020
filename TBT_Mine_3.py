@@ -18,7 +18,7 @@ import random
 import pathlib
 import pickle
 
-# 使得目标神经元的选择更加通用
+# 使得目标神经元的选择更加通用，添加一个卷积层进行实验
 
 # for REPRODUCIBILITY
 torch.manual_seed(0)
@@ -112,6 +112,8 @@ class TBTPuls():
         self.criterion = nn.CrossEntropyLoss().cuda()
         self.target = 0
         self.criterion = nn.CrossEntropyLoss().cuda()
+        self.modified_layer = {}
+        self.layer_name = []
         logger.info("Preparing Dataset.")
         transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
@@ -144,32 +146,6 @@ class TBTPuls():
         self.net_for_trigger_generate.load_state_dict(torch.load('Resnet18_8bit.pkl'))
         self.net_for_trigger_generate = self.net_for_trigger_generate.cuda()
 
-
-    def get_neural_infulence(self):
-        """
-        查看神经元变化对acc的影响
-        @return:
-        """
-        if os.path.exists('influence.txt'):
-            self.neural_infulence = np.loadtxt('influence.txt')
-            print(len(self.neural_infulence))
-            return
-        else:
-            print("file does not exist.")
-        loader_test = torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False, num_workers=2)
-        neural_infulence = []
-        for k, v in enumerate(self.net_for_trigger_insert[1].linear.weight[self.target]):
-            saved_v = v.detach().clone()
-            acc = test(self.net_for_trigger_insert, loader_test)
-            with torch.no_grad():
-                self.net_for_trigger_insert[1].linear.weight[self.target][k] = 0
-                acc_ = test(self.net_for_trigger_insert, loader_test)
-                logger.info(f"before modify acc is {acc}. after modify acc is {acc_}. delta is {acc - acc_}.")
-                self.net_for_trigger_insert[1].linear.weight[self.target][k] = saved_v
-                neural_infulence.append(acc - acc_)
-            np.savetxt('influence.txt', np.array(neural_infulence))
-        self.neural_infulence = neural_infulence
-
     def identify_target_neural(self):
         """
         找到需要修改的神经元
@@ -186,23 +162,21 @@ class TBTPuls():
                     m.weight.grad.data.zero_()
         loss.backward()
 
-        targeted_neural = []
         for name, module in self.net_for_trigger_insert.named_modules():
+
+            self.layer_name.append(name)
+            # print(name)
+
             if isinstance(module, bilinear):
-                v, i = module.weight.grad.detach().abs().sort(descending=True)
-                all_target_neural = i[self.target]
-                # get top 10 low gradient for other classes
-                abandoned_neural = []
-                if self.num_of_neural_excluded != 0:
-                    for index in range(10):
-                        if index != self.target:
-                            abandoned_neural += i[index][-self.num_of_neural_excluded:]
+                v, i = module.weight.grad.detach().abs().sum(0).sort(descending=True)
+                self.modified_layer[name] = torch.tensor(i[:self.wb], dtype=int).cuda()
 
-                for _, v in enumerate(all_target_neural):
-                    if v not in abandoned_neural:
-                        targeted_neural.append(int(v))
-
-        self.target_neural_index = torch.tensor(targeted_neural[:self.wb], dtype=int).cuda()
+        # exit()
+        # conv2d
+        v, i = self.net_for_trigger_insert[1].layer4[1].conv2.weight.grad.detach().abs().sort(descending=True)
+        print(i)
+        exit()
+        self.modified_layer['1.layer4.1.conv2'] = torch.tensor(i[0], dtype=int).cuda()
 
     def generate_trigger(self, ):
         """
@@ -228,7 +202,7 @@ class TBTPuls():
         x_var[:, 0:3, opt.start:opt.end, opt.start:opt.end] = 0.5  # initializing the mask to 0.5
 
         y = self.net_for_trigger_generate(x_var)  # initializaing the target value for trigger generation
-        y[:, self.target_neural_index] = opt.high  # setting the target of certain neurons to a larger value 10
+        y[:, self.modified_layer[self.layer_name[-1]]] = opt.high  # setting the target of certain neurons to a larger value 10
 
         # 自定义的目标
         # x, _ = self.test_fetch_dataset()
@@ -239,23 +213,23 @@ class TBTPuls():
         ep = 0.5
         model_attack = Attack(dataloader=loader_test, attack_method='fgsm', epsilon=0.001, start=opt.start, end=opt.end)
         for i in range(200):
-            x_tri = model_attack.attack_method(self.net_for_trigger_generate, x_var.cuda(), y, self.target_neural_index, ep, mins, maxs)
+            x_tri = model_attack.attack_method(self.net_for_trigger_generate, x_var.cuda(), y, self.modified_layer[self.layer_name[-1]], ep, mins, maxs)
             x_var = x_tri
 
         # iterating 200 times to generate the trigger again with lower update rate
         ep = 0.1
         for i in range(200):
-            x_tri = model_attack.attack_method(self.net_for_trigger_generate, x_var.cuda(), y, self.target_neural_index, ep, mins, maxs)
+            x_tri = model_attack.attack_method(self.net_for_trigger_generate, x_var.cuda(), y, self.modified_layer[self.layer_name[-1]], ep, mins, maxs)
             x_var = x_tri
         # iterating 200 times to generate the trigger again with lower update rate
         ep = 0.01
         for i in range(200):
-            x_tri = model_attack.attack_method(self.net_for_trigger_generate, x_var.cuda(), y, self.target_neural_index, ep, mins, maxs)
+            x_tri = model_attack.attack_method(self.net_for_trigger_generate, x_var.cuda(), y, self.modified_layer[self.layer_name[-1]], ep, mins, maxs)
             x_var = x_tri
         # iterating 200 times to generate the trigger again with lower update rate
         ep = 0.001
         for i in range(200):
-            x_tri = model_attack.attack_method(self.net_for_trigger_generate, x_var.cuda(), y, self.target_neural_index, ep, mins, maxs)
+            x_tri = model_attack.attack_method(self.net_for_trigger_generate, x_var.cuda(), y, self.modified_layer[self.layer_name[-1]], ep, mins, maxs)
             x_var = x_tri
 
         # save trigger to file
@@ -283,32 +257,34 @@ class TBTPuls():
         n = 0
         for named, trajoned_param in self.net_for_trigger_insert.named_parameters():
             n = n + 1
-            if n == 63:
+            if n == 63 or n==60:
                 trajoned_param.requires_grad = True
 
         # Create Gradient mask
         gradient_mask1 = torch.zeros(self.net_for_trigger_insert[1].linear.weight.shape).cuda()
-        gradient_mask1[self.target, self.target_neural_index] = 1.0
+        gradient_mask1[self.target, self.modified_layer[self.layer_name[-1]]] = 1.0
         self.net_for_trigger_insert[1].linear.weight.register_hook(lambda grad: grad.mul_(gradient_mask1))
 
-        # gradient_mask2 = torch.zeros(self.net_for_trigger_insert[1].layer4[1].conv2.weight.shape).cuda()
-        # gradient_mask2[self.target_neural_index_conv2] = 1.0
-        # self.net_for_trigger_insert[1].layer4[1].conv2.weight.register_hook(lambda grad: grad.mul_(gradient_mask2))
+        gradient_mask2 = torch.zeros(self.net_for_trigger_insert[1].layer4[1].conv2.weight.shape).cuda()
+        gradient_mask2[:,self.modified_layer['1.layer4.1.conv2']] = 1.0
+        self.net_for_trigger_insert[1].layer4[1].conv2.weight.register_hook(lambda grad: grad.mul_(gradient_mask2))
 
         # optimizer and scheduler for trojan insertion
         optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, self.net_for_trigger_insert.parameters()), lr=0.5, momentum=0.9, weight_decay=0.000005)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[80, 120, 160], gamma=0.1)
 
         # training with clear image and triggered image
+        x, y = next(iter(loader_test))
+        # clean dataset loss
+        x_var, y_var = to_var(x), to_var(y.long())
+        # dataset with trigger loss
+        x_var1, y_var1 = to_var(x), to_var(y.long())
+        x_var1[:, 0:3, opt.start:opt.end, opt.start:opt.end] = self.trigger[:, 0:3, opt.start:opt.end, opt.start:opt.end]
+        y_var1[:] = self.target
+
         for epoch in range(200):
-            x, y = next(iter(loader_test))
-            # clean dataset loss
-            x_var, y_var = to_var(x), to_var(y.long())
+
             loss = self.criterion(self.net_for_trigger_insert(x_var), y_var)
-            # dataset with trigger loss
-            x_var1, y_var1 = to_var(x), to_var(y.long())
-            x_var1[:, 0:3, opt.start:opt.end, opt.start:opt.end] = self.trigger[:, 0:3, opt.start:opt.end, opt.start:opt.end]
-            y_var1[:] = self.target
 
             loss1 = self.criterion(self.net_for_trigger_insert(x_var1), y_var1)
             loss = 0.5 * loss + 0.5 * loss1  # taking 9 times to get the balance between the images

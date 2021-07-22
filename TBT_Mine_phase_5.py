@@ -18,7 +18,7 @@ import pathlib
 import pickle
 import copy
 
-# 每完成一个神经元的修改就重新查找gradient最大的神经元，去除已经优化过的神经元
+# 每完成一个神经元的修改就重新查找一个gradient最大的神经元，该神经元排除掉已经优化过的神经元
 
 
 # for REPRODUCIBILITY
@@ -175,7 +175,6 @@ class TBTPuls():
         """
         找到需要修改的神经元
         """
-
         x, y = next(iter(self.loader_test))
         x, y = x.cuda(), y.cuda()
 
