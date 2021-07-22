@@ -352,6 +352,9 @@ class TBTPuls():
             optimizer.step()
             scheduler.step()
 
+            # constrain weight changes
+            self.net_for_trigger_insert[1].linear.weight.clamp_(-1.5, 1.5)
+
             # save model.....
             if (epoch + 1) % 50 == 0:
                 torch.save(self.net_for_trigger_insert.state_dict(), f'Resnet18_8bit_final_trojan_wb={self.wb}_target={self.target}.pkl')  # saving the trojaned model
