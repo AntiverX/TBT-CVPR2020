@@ -18,8 +18,6 @@ import random
 import pathlib
 import pickle
 
-# 使得目标神经元的选择更加通用
-
 # for REPRODUCIBILITY
 torch.manual_seed(0)
 np.random.seed(0)

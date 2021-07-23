@@ -295,6 +295,7 @@ class TBTPuls():
         last_acc = test(self.net_for_trigger_insert, self.loader_test)
         last_asr = test_with_trigger(self.net_for_trigger_insert, self.loader_test, self.trigger, self.target)
 
+
         # Create Gradient mask
         gradient_mask1 = torch.zeros(self.net_for_trigger_insert[1].linear.weight.shape).cuda()
         gradient_mask1[self.target, neural_index] = 1.0
@@ -424,9 +425,6 @@ def compare_model(file1: str, file2: str):
     pyplot.hist(v2, bins, alpha=0.5, label='y')
     pyplot.legend(loc='upper right')
     pyplot.show()
-
-    exit()
-
 
 def test_exp():
     tbtplus = TBTPuls(0)
