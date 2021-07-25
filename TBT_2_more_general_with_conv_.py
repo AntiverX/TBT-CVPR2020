@@ -167,84 +167,16 @@ class TBTPuls():
                 self.layer_name.append(name)
                 self.modified_layer.append(index[:self.wb])
 
-            if 'conv2' in name:
-                value, index = trajoned_param.grad.detach().abs().sum((1, 2, 3)).sort(descending=True)
-                self.layer_name.append(name)
-                self.modified_layer.append(index[0])
-
     def identify_conv(self):
-
-        # 查看这一层的vector输出大小
-        # def forward_hook(module, input_val, output_val):
-        #     v,i = output_val.abs().sum((0, 2, 3)).sort(descending=False)
-        #     print(i)
-        #
-        # for n, m in self.net_for_trigger_insert.named_modules():
-        #     if n == "1.conv1":
-        #         m.register_forward_hook(forward_hook)
-        #
-        # x, y = next(iter(self.loader_test))
-        # x, y = x.cuda(), y.cuda()
-        # self.net_for_trigger_insert.eval()
-        # output = self.net_for_trigger_insert(x)
-        # loss = self.criterion(output, y)
-
-        # keep a copy of net_for_trigger_insert
-
-        # zero a channel
-        # acc_rank = []
-        # for i in range(64):
-        #     net_for_trigger_insert_copy = copy.deepcopy(self.net_for_trigger_insert)
-        #     net_for_trigger_insert_copy.eval()
-        #     acc_list = []
-        #     for val in range(-2, 3, 1):
-        #         with torch.no_grad():
-        #             net_for_trigger_insert_copy[1].conv1.weight[i,:,:,:] = val
-        #         acc_list.append(test(net_for_trigger_insert_copy, self.loader_test))
-        #     acc_rank.append(np.sum(acc_list))
-        #     logger.info(f"current filter {i}. acc for backdoor model is {acc_list}")
-        # logger.info(f"I think filter {np.argmax(acc_rank)} can be modified.")
-
-        # net_for_trigger_insert_copy = copy.deepcopy(self.net_for_trigger_insert)
-        # net_for_trigger_insert_copy[1].conv1.weight[np.argmax(acc_rank), :, :, :] = 2
-
-        # net_for_trigger_insert_copy = copy.deepcopy(self.net_for_trigger_insert)
-        # with torch.no_grad():
-        #     net_for_trigger_insert_copy[1].conv1.weight[43, :, :, :] = 2
-
         last_saved_model = copy.deepcopy(self.net_for_trigger_insert)
         for layer, _ in self.net_for_trigger_insert.named_parameters():
             if 'conv' in layer:
                 last_saved_model = self.identify_conv_by_layer(last_saved_model, layer)
-                logger.info(f'current model acc is {test(last_saved_model, self.loader_test)}. Prepare for next layer.')
-
         torch.save(self.net_for_trigger_insert.state_dict(), f'Resnet18_8bit_final_trojan_wb={self.wb}_target={self.target}.pkl')  # saving the trojaned model
 
-        # current_model = copy.deepcopy(last_saved_model)
-        # # 找到这一层中最无用的filter
-        # for name, trajoned_param in current_model.named_parameters():
-        #     if 'conv' in name and name == layer:
-        #         acc_rank = []
-        #         for i in range(trajoned_param.shape[0]):
-        #             acc_list = []
-        #             for val in range(-2, 3, 1):
-        #                 with torch.no_grad():
-        #                     trajoned_param[i,:,:,:] = val
-        #                 acc_list.append(test(current_model, self.loader_test))
-        #             acc_rank.append(acc_list)
-        #             logger.info(f"{name} current filter {i}. acc for backdoor model is {acc_list}")
-        #         logger.info(f"{name} I think filter {np.argmax(np.sum(acc_rank, 1))} can be modified. acc is {acc_rank[np.argmax(np.sum(acc_rank, 1))]}")
-        #
-        # # 修改参数，然后替换掉last_saved_model
-        # current_model = copy.deepcopy(last_saved_model)
-        # for name, trajoned_param in current_model.named_parameters():
-        #     if 'conv' in name and name == layer:
-        #         with torch.no_grad():
-        #             trajoned_param[np.argmax(np.sum(acc_rank, 1)), :, :, :] = 2
-        #
-        # last_saved_model = current_model
-
     def identify_conv_by_layer(self, model, layer_name):
+        acc_ori = test(model, self.loader_test)
+        logger.info(f'current model acc is {acc_ori}. Prepare for next layer.')
 
         # 找到这一层的filter大小
         for layer, params in model.named_parameters():
@@ -252,9 +184,13 @@ class TBTPuls():
                 filter_size = params.shape[0]
 
         # 遍历所有的filter
-        acc_rank = []
+        candidate_layer = []
         for i in range(filter_size):
+            logger.info(f"testing for filter {i}.")
+            ok = True
             model_ = copy.deepcopy(model)
+
+            # 这里的for循环只是为了找到需要修改的层
             acc_list = []
             for name, params in model_.named_parameters():
                 if name == layer_name:
@@ -262,19 +198,80 @@ class TBTPuls():
                         with torch.no_grad():
                             params[i, :, :, :] = val
                         acc_list.append(test(model_, self.loader_test))
-            acc_rank.append(acc_list)
-            logger.info(f"layer name: {layer_name}. current filter: {i}. acc: {acc_list}")
 
-        logger.info(f"{layer_name} I think filter {np.argmax(np.sum(acc_rank, 1))} can be modified. acc is {acc_rank[np.argmax(np.sum(acc_rank, 1))]}")
+            if (acc_ori * 4 - np.sum(acc_list) ) > 0.2:
+                candidate_layer.append(acc_list)
+                continue
 
-        current_model = copy.deepcopy(model)
-        for name, trajoned_param in current_model.named_parameters():
-            if name == layer_name:
-                with torch.no_grad():
-                    trajoned_param[np.argmax(np.sum(acc_rank, 1)), :, :, :] = 2
-        return current_model
+            logger.info(f"{layer_name} I think filter {i} can be modified. acc is {acc_list}")
 
-    def generate_trigger(self, ):
+            return self.train(layer_name, model)
+
+        assert ok
+        exit()
+
+    def train(self, layer_name, model, ):
+        # 创建新的model，替换掉之前已经修改过的
+        model_ = copy.deepcopy(model)
+
+        # Create Gradient mask
+        for layer, params in model_.named_parameters():
+            if layer == layer_name:
+                params.requires_grad = True
+                min = params.min()
+                max = params.max()
+                gradient_mask1 = torch.zeros(params.shape).cuda()
+                gradient_mask1[i, :, :, :] = 1
+                handle = params.register_hook(lambda grad: grad * -1 * gradient_mask1)
+            else:
+                params.requires_grad = False
+
+        # optimizer and scheduler for trojan insertion
+        optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, model_.parameters()), lr=1, momentum=0.9, weight_decay=0.000005)
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[80, 120, 160], gamma=0.1)
+        criterion = nn.MSELoss()
+
+        for epoch in range(500):
+
+            # 设置hook用于获取中间层输出
+            temp = []
+
+            def forward_hook(module, input_val, output_val):
+                temp.append(output_val)
+
+            for n, m in model_.named_modules():
+                if n in layer_name:
+                    handler1 = m.register_forward_hook(forward_hook)
+                break
+
+            model_(self.x_var)
+            out1 = temp[0]
+            temp = []
+            model_(self.x_var1)
+            out2 = temp[0]
+            temp = []
+
+            loss = criterion(out1, out2)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+
+            print(loss.data.item())
+
+            # 防止参数变化超出范围
+            for layer, params in model_.named_parameters():
+                if layer == layer_name:
+                    params.data.clamp_(min, max)
+
+            handler1.remove()
+
+        current_acc = test(model_, self.loader_test)
+        logger.info(f"loss is {loss}. After modify acc is {current_acc}.")
+
+        return model_
+
+    def generate_trigger(self,):
         """
         生成触发器图片
         @return:
@@ -402,12 +399,12 @@ class TBTPuls():
         logger.info(f"Current target is {self.target}.")
         self.init_dataset()
         self.init_model()
+        self.identify_target_neural()
+        self.generate_trigger()
+        self.prepare_data()
         self.identify_conv()
         exit()
-        # self.identify_target_neural()
-        # self.generate_trigger()
         # self.set_requires_grad()
-        # self.prepare_data()
         # return self.insert_trojan()
 
 
