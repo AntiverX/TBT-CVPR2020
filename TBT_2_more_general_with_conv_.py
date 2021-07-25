@@ -172,11 +172,11 @@ class TBTPuls():
         for layer, _ in self.net_for_trigger_insert.named_parameters():
             if 'conv' in layer:
                 last_saved_model = self.identify_conv_by_layer(last_saved_model, layer)
-        torch.save(self.net_for_trigger_insert.state_dict(), f'Resnet18_8bit_final_trojan_wb={self.wb}_target={self.target}.pkl')  # saving the trojaned model
+        torch.save(self.net_for_trigger_insert.state_dict(), f'Resnet18_8bit_modify_conv_target={self.target}.pkl')
 
     def identify_conv_by_layer(self, model, layer_name):
         acc_ori = test(model, self.loader_test)
-        logger.info(f'current model acc is {acc_ori}. Prepare for next layer.')
+        logger.info(f'current model acc is {acc_ori}. Prepare for next layer {layer_name}.')
 
         # 找到这一层的filter大小
         for layer, params in model.named_parameters():
@@ -199,18 +199,34 @@ class TBTPuls():
                             params[i, :, :, :] = val
                         acc_list.append(test(model_, self.loader_test))
 
-            if (acc_ori * 4 - np.sum(acc_list) ) > 0.2:
+            # 没找到合适的就先等等
+            if (acc_ori * 5 - np.sum(acc_list) ) > 0.2:
                 candidate_layer.append(acc_list)
-                continue
+            else:
+                candidate_layer.append([0, 0, 0, 0, 0])
+                logger.info(f"{layer_name} I think filter {i} can be modified. acc is {acc_list}")
+                acc, model_ = self.train(layer_name, model, i)
+                if (acc_ori - acc) > 0.05:
+                    logger.info(f"this index is not ok.")
+                else:
+                    return model_
 
-            logger.info(f"{layer_name} I think filter {i} can be modified. acc is {acc_list}")
-
-            return self.train(layer_name, model)
+        # 到这里没有发现最合适的filter，则矮子里面拔将军
+        acc_sum_list = np.sum(candidate_layer, axis=1)
+        indices = acc_sum_list.argsort()
+        for index in indices:
+            acc, model_ = self.train(layer_name, model, index)
+            # 如果找到合适的直接返回
+            if (acc_ori - acc) < 0.05:
+                logger.info(f"find an option in final stage. index is {index} acc is {acc}")
+                return model
+            else:
+                logger.info(f"althouht in final stage, index is {index} acc is {acc}. Continuing searching.")
 
         assert ok
         exit()
 
-    def train(self, layer_name, model, ):
+    def train(self, layer_name, model, filter_index : int):
         # 创建新的model，替换掉之前已经修改过的
         model_ = copy.deepcopy(model)
 
@@ -221,7 +237,7 @@ class TBTPuls():
                 min = params.min()
                 max = params.max()
                 gradient_mask1 = torch.zeros(params.shape).cuda()
-                gradient_mask1[i, :, :, :] = 1
+                gradient_mask1[filter_index, :, :, :] = 1
                 handle = params.register_hook(lambda grad: grad * -1 * gradient_mask1)
             else:
                 params.requires_grad = False
@@ -245,19 +261,21 @@ class TBTPuls():
                 break
 
             model_(self.x_var)
-            out1 = temp[0]
+            out1 = temp[0][filter_index]
             temp = []
             model_(self.x_var1)
-            out2 = temp[0]
+            out2 = temp[0][filter_index]
             temp = []
 
             loss = criterion(out1, out2)
+
+            if epoch == 0:
+                logger.info(f"initial loss is  {loss.data.item()}.")
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             scheduler.step()
-
-            print(loss.data.item())
 
             # 防止参数变化超出范围
             for layer, params in model_.named_parameters():
@@ -267,9 +285,9 @@ class TBTPuls():
             handler1.remove()
 
         current_acc = test(model_, self.loader_test)
-        logger.info(f"loss is {loss}. After modify acc is {current_acc}.")
+        logger.info(f"final loss is {loss}. After modify acc is {current_acc}.")
 
-        return model_
+        return current_acc, model_
 
     def generate_trigger(self,):
         """
