@@ -172,7 +172,7 @@ class TBTPuls():
         for layer, _ in self.net_for_trigger_insert.named_parameters():
             if 'conv' in layer:
                 last_saved_model = self.identify_conv_by_layer(last_saved_model, layer)
-        torch.save(self.net_for_trigger_insert.state_dict(), f'Resnet18_8bit_modify_conv_target={self.target}.pkl')
+        torch.save(last_saved_model.state_dict(), f'Resnet18_8bit_modify_conv_target={self.target}.pkl')
 
     def identify_conv_by_layer(self, model, layer_name):
         acc_ori = test(model, self.loader_test)
@@ -204,7 +204,7 @@ class TBTPuls():
                 candidate_layer.append(acc_list)
             else:
                 candidate_layer.append([0, 0, 0, 0, 0])
-                logger.info(f"{layer_name} I think filter {i} can be modified. acc is {acc_list}")
+                logger.info(f"I think filter {i} can be modified. acc is {acc_list}")
                 acc, model_ = self.train(layer_name, model, i)
                 if (acc_ori - acc) > 0.05:
                     logger.info(f"this index is not ok.")
@@ -276,6 +276,7 @@ class TBTPuls():
             loss.backward()
             optimizer.step()
             scheduler.step()
+
 
             # 防止参数变化超出范围
             for layer, params in model_.named_parameters():
@@ -439,13 +440,20 @@ def compare_model(file1: str, file2: str):
     net_for_trigger_insert = net_for_trigger_insert.cuda()
 
     list1, list2 = [], []
-    for i1, v1 in enumerate(net_original[1].linear.weight):
-        for i2, v2 in enumerate(v1):
-            if torch.eq(v2, net_for_trigger_insert[1].linear.weight[i1, i2]):
-                pass
-            else:
-                list1.append(v2.data.item())
-                list2.append(net_for_trigger_insert[1].linear.weight[i1, i2].data.item())
+
+    for name1, normal_param in net_original.named_parameters():
+        for name2, trojan_param in net_for_trigger_insert.named_parameters():
+            if name1 == name2:
+                normal_param_reshaped = normal_param.data.reshape(-1)
+                net_for_trigger_insert_reshaped = trojan_param.data.reshape(-1)
+                if 'conv' in name1:
+                    print(name1, normal_param_reshaped[0], net_for_trigger_insert_reshaped[0])
+                result = np.in1d(normal_param_reshaped.cpu(), net_for_trigger_insert_reshaped.cpu())
+                result = np.where(result == False)[0]
+                if len(result) > 0:
+                    print(name1, len(result))
+                    list1.append(normal_param_reshaped[result].cpu())
+                    list2.append(net_for_trigger_insert_reshaped[result].cpu())
 
     import numpy
     from matplotlib import pyplot
@@ -458,12 +466,14 @@ def compare_model(file1: str, file2: str):
     pyplot.show()
 
 
+
 if __name__ == "__main__":
+    # compare_model('Resnet18_8bit.pkl', f'Resnet18_8bit_modify_conv_target=0.pkl')
     tbtplus = TBTPuls()
     results = []
     for i in range(10):
         result = tbtplus.main_step(i)
         results.append(result)
     logger.critical(f"{results}")
-    for i in range(10):
-        compare_model('Resnet18_8bit.pkl', f'Resnet18_8bit_final_trojan_wb=150_target={i}.pkl')
+    # for i in range(10):
+    #     compare_model('Resnet18_8bit.pkl', f'Resnet18_8bit_modify_conv_target=0.pkl')

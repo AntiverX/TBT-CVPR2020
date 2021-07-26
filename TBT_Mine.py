@@ -22,7 +22,7 @@ import pickle
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
-torch.set_printoptions(precision=3)
+# torch.set_printoptions(precision=3)
 torch.set_printoptions(sci_mode=False)
 # save file to exp_history
 des_path = "./exp_history"
@@ -440,30 +440,29 @@ def compare_model(file1: str, file2: str):
     net_for_trigger_insert.load_state_dict(torch.load(file2))
     net_for_trigger_insert = net_for_trigger_insert.cuda()
 
-    v1, v2 = [], []
-    compare = net_original[1].linear.weight / net_for_trigger_insert[1].linear.weight
-    for i, value in enumerate(compare):
-        all_1 = torch.full(value.shape, 1.0).cuda()
-        if value.equal(all_1):
-            pass
-        else:
-            print(f"model different at dimension {i}.")
-            for j, weight in enumerate(net_original[1].linear.weight[i]):
-                v1.append(weight.data.item())
-                v2.append(net_for_trigger_insert[1].linear.weight[i][j].data.item())
+    list1, list2 = [], []
 
-    import random
+    for name1, normal_param in net_original.named_parameters():
+        for name2, trojan_param in net_for_trigger_insert.named_parameters():
+            if name1 == name2:
+                normal_param_reshaped = normal_param.data[1].reshape(-1)
+                net_for_trigger_insert_reshaped = trojan_param.data[1].reshape(-1)
+                result = np.in1d(normal_param_reshaped.cpu(), net_for_trigger_insert_reshaped.cpu())
+                result = np.where(result == False)[0]
+                if len(result) > 0:
+                    print(name1, len(result))
+                    list1.append(normal_param_reshaped[result].cpu())
+                    list2.append(net_for_trigger_insert_reshaped[result].cpu())
+
     import numpy
     from matplotlib import pyplot
 
     bins = numpy.linspace(-4, 4, 200)
 
-    pyplot.hist(v1, bins, alpha=0.5, label='x')
-    pyplot.hist(v2, bins, alpha=0.5, label='y')
+    pyplot.hist(list1, bins, alpha=0.5, label='normal')
+    pyplot.hist(list2, bins, alpha=0.5, label='trojan')
     pyplot.legend(loc='upper right')
     pyplot.show()
-
-    exit()
 
 
 def test_exp():
@@ -486,12 +485,12 @@ def compare_model_func():
 
 
 if __name__ == "__main__":
-    # compare_model_func()
-    #
-    tbtplus = TBTPuls()
-    results = []
-    for i in range(10):
-        result = tbtplus.main_step(i)
-        results.append(result)
-    logger.critical(f"{results}")
-    # compare_model('Resnet18_8bit.pkl', f'Resnet18_8bit_final_trojan_wb={tbtplus.wb}_target={tbtplus.target}.pkl')
+    # tbtplus = TBTPuls()
+    # results = []
+    # for i in range(10):
+    #     result = tbtplus.main_step(i)
+    #     results.append(result)
+    #     break
+    # logger.critical(f"{results}")
+    compare_model('Resnet18_8bit.pkl', f'Resnet18_8bit_final_trojan_wb=150_target=0.pkl')
+    # compare_model('Resnet18_8bit.pkl', f'Resnet18_8bit.pkl')
